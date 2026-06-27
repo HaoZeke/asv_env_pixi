@@ -16,7 +16,7 @@ try:
     from asv_env_rattler import Rattler as _RattlerBase
     from asv_env_rattler import _HAS_RATTLER
 except ImportError as exc:  # pragma: no cover
-    raise ImportError("asv_pixi requires asv_env_rattler (py-rattler API backend)") from exc
+    raise ImportError("asv_env_pixi requires asv_env_rattler (py-rattler API backend)") from exc
 
 from asv import environment
 
@@ -29,6 +29,6 @@ class Pixi(_RattlerBase):
     def __init__(self, conf, python, requirements, tagged_env_vars):
         if not _HAS_RATTLER:
             raise environment.EnvironmentUnavailable(
-                "asv_pixi needs py-rattler (API); install py-rattler / asv_env_rattler deps"
+                "asv_env_pixi needs py-rattler (API); install py-rattler / asv_env_rattler deps"
             )
         super().__init__(conf, python, requirements, tagged_env_vars)
