@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asv_env_pixi"
-version = "0.1.0"
+version = "0.1.2"
 description = "ASV environment plugin (pixi) — install and list in asv.conf.json plugins"
-requires-python = ">=3.9"
-dependencies = ["asv>=0.6.5", "asv_env_rattler>=0.1.0"]
+requires-python = ">=3.10"
+dependencies = ["asv>=0.6.5", "packaging", "asv_env_rattler>=0.1.2"]
 
 [project.entry-points."asv.plugins"]
 pixi = "asv_env_pixi"
