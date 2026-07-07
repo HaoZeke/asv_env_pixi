@@ -4,13 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asv_env_pixi"
-version = "0.1.2"
-description = "ASV environment plugin (pixi) — install and list in asv.conf.json plugins"
+version = "0.2.0"
+description = "ASV environment backend for environment_type=pixi (pixi CLI workspaces)"
+readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["asv>=0.6.5", "packaging", "asv_env_rattler>=0.1.2"]
+license = { text = "BSD-3-Clause" }
+dependencies = ["asv>=0.6.5"]
+
+[project.entry-points."asv.environment_backends"]
+pixi = "asv_env_pixi:Pixi"
 
 [project.entry-points."asv.plugins"]
-pixi = "asv_env_pixi"
+pixi = "asv_env_pixi:Pixi"
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [tool.setuptools.packages.find]
 include = ["asv_env_pixi*"]
