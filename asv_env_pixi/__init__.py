@@ -67,6 +67,21 @@ class Pixi(environment.Environment):
             return False
         return _find_pixi_bin() is not None
 
+    def _iter_req_items(self):
+        return {**self._requirements, **getattr(self, "_base_requirements", {})}.items()
+
+    def _partition_requirements(self):
+        """Split matrix/base requirements into conda-style vs pip+ keys."""
+        conda_specs = []
+        pip_specs = []
+        for key, val in self._iter_req_items():
+            if key.startswith("pip+"):
+                name = key[4:]
+                pip_specs.append((name, val))
+            else:
+                conda_specs.append((key, val))
+        return conda_specs, pip_specs
+
     def _write_manifest(self) -> Path:
         root = Path(self._path)
         root.mkdir(parents=True, exist_ok=True)
@@ -83,14 +98,17 @@ class Pixi(environment.Environment):
         else:
             plat = "linux-64"
         channels = ", ".join(f'"{c}"' for c in self._channels)
+        conda_specs, pip_specs = self._partition_requirements()
         dep_lines = [
-            f'python = "{self._python}.*"' if re.match(r"^\d+\.\d+$", self._python) else f'python = "{self._python}"',
+            (
+                f'python = "{self._python}.*"'
+                if re.match(r"^\d+\.\d+$", self._python)
+                else f'python = "{self._python}"'
+            ),
             'pip = "*"',
             'wheel = "*"',
         ]
-        for key, val in {**self._requirements, **getattr(self, "_base_requirements", {})}.items():
-            if key.startswith("pip+"):
-                continue
+        for key, val in conda_specs:
             dep_lines.append(f'{key} = "{val}"' if val else f'{key} = "*"')
         body = textwrap.dedent(
             f"""\
@@ -103,9 +121,39 @@ class Pixi(environment.Environment):
             """
         )
         body += "\n".join(dep_lines) + "\n"
+        # Joint path: simple pip+ pins go into [pypi-dependencies] so pixi can
+        # solve them with conda deps. Complex declarations fall through to
+        # post-install via python -m pip (ParsedPipDeclaration).
+        simple_pypi = []
+        for name, val in pip_specs:
+            if not name or any(c in name for c in " \t@;"):
+                continue
+            if val and any(c in str(val) for c in " \t@;"):
+                continue
+            if val:
+                simple_pypi.append(f'{name} = "=={val}"')
+            else:
+                simple_pypi.append(f'{name} = "*"')
+        if simple_pypi:
+            body += "\n[pypi-dependencies]\n" + "\n".join(simple_pypi) + "\n"
         manifest = root / "pixi.toml"
         manifest.write_text(body, encoding="utf-8")
         return manifest
+
+    def _install_pip_requirements(self):
+        """Install every pip+ matrix/base key via python -m pip in the prefix.
+
+        Simple pins are also listed under [pypi-dependencies] so pixi can
+        joint-solve them; this pass makes installs fail-closed if the
+        manifest path skipped a declaration (and covers complex specs).
+        """
+        for key, val in self._iter_req_items():
+            if not key.startswith("pip+"):
+                continue
+            name = key[4:]
+            declaration = f"{name} {val}".strip() if val else name
+            parsed = util.ParsedPipDeclaration(declaration)
+            util.construct_pip_call(self._run_pip, parsed)()
 
     def _setup(self):
         log.info(f"Creating pixi workspace for {self.name} via CLI {self._pixi}")
@@ -128,6 +176,7 @@ class Pixi(environment.Environment):
             raise environment.EnvironmentUnavailable(
                 f"pixi install finished but no python under {self._pixi_env_prefix}"
             )
+        self._install_pip_requirements()
 
     def find_executable(self, executable):
         prefix = self._pixi_env_prefix

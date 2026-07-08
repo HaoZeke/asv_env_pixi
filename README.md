@@ -54,3 +54,10 @@ pixi = "asv_env_pixi:Pixi"
 pip install -e ".[test]"
 pytest -q
 ```
+
+## Matrix `pip+` requirements
+
+Conda-style matrix keys go into `[dependencies]`. Keys prefixed with `pip+`
+are written to `[pypi-dependencies]` (simple pins) and also installed via
+`python -m pip` after `pixi install` so nothing is silently dropped.
+
