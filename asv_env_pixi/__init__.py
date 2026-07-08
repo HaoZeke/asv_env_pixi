@@ -40,6 +40,11 @@ class Pixi(environment.Environment):
     """Manage an ASV env with the pixi CLI (subprocess-driven)."""
 
     tool_name = "pixi"
+    matrix_install_mode = "create"
+    supports_joint_pypi_conda_solve = True
+    supports_joint_pypi_solve = True
+    project_install_prefers_no_deps = True
+    requires_host_tool = "pixi"
 
     def __init__(self, conf, python, requirements, tagged_env_vars):
         self._python = python

@@ -39,3 +39,4 @@ def test_entry_point_metadata():
     except AttributeError:
         group = list(eps.get("asv.environment_backends", []))
     assert any(ep.name == "pixi" for ep in group)
+
