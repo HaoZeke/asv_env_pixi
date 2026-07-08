@@ -4,15 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "asv_env_pixi"
-version = "0.3.0"
-description = "ASV environment backend for pixi layout via py-rattler (Rust/maturin)"
+version = "0.4.0"
+description = "ASV environment backend for pixi via pixi CLI (subprocess)"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BSD-3-Clause" }
-dependencies = [
-  "asv>=0.6.5",
-  "py-rattler>=0.22",
-]
+dependencies = ["asv>=0.6.5"]
 
 [project.entry-points."asv.environment_backends"]
 pixi = "asv_env_pixi:Pixi"

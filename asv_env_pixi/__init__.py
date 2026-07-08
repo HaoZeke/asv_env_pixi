@@ -1,146 +1,127 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-"""ASV ``environment_type="pixi"`` via the **py-rattler** Rust stack.
+"""ASV ``environment_type="pixi"`` via the **pixi CLI** (subprocess).
 
-Pixi's product solver/installer is rattler. This backend creates prefixes with
-in-process ``rattler.solve`` / ``rattler.install`` (maturin wheel ``py-rattler``),
-writes a minimal ``pixi.toml`` marker for layout honesty, and places the env at
-``.pixi/envs/default`` under the ASV env directory.
+Primary create path: locate a real ``pixi`` binary, write a minimal workspace
+manifest, run ``pixi install``, use ``.pixi/envs/default``.
 
-This is **not** a subprocess wrapper around the pixi CLI and does **not** use
-the unrelated PyPI project named ``pixi``.
-
-Core ASV does not ship this backend in-tree; this package is the provider.
+This is intentionally **not** a maturin/rattler-crate native core. For
+Rust-crate-backed conda-ecosystem creates use ``asv_env_rattler``.
 """
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
+import shutil
 import textwrap
 from pathlib import Path
 
 from asv import environment, util
 from asv.console import log
 
-try:
-    from rattler import ChannelPriority, MatchSpec, VirtualPackage, install, solve
-    import inspect as _inspect
-
-    _HAS_RATTLER = True
-except ImportError:  # pragma: no cover
-    _HAS_RATTLER = False
-    ChannelPriority = MatchSpec = VirtualPackage = install = solve = None
-    _inspect = None
-
 WIN = os.name == "nt"
 
 
-def _virtual_packages():
-    if hasattr(VirtualPackage, "detect"):
-        return VirtualPackage.detect()
-    return VirtualPackage.current()
-
-
-async def _rattler_create(prefix: str, specs: list[str], channels: list[str]) -> None:
-    """In-process Rust create via py-rattler."""
-    if not _HAS_RATTLER:
-        raise environment.EnvironmentUnavailable(
-            "asv_env_pixi requires py-rattler (maturin/Rust: pip install py-rattler)"
-        )
-    match_specs = [MatchSpec(p) for p in specs]
-    kwargs = {
-        "specs": match_specs,
-        "virtual_packages": _virtual_packages(),
-        "channel_priority": ChannelPriority.Strict,
-    }
-    params = _inspect.signature(solve).parameters
-    if "sources" in params:
-        kwargs["sources"] = list(channels)
-    else:
-        kwargs["channels"] = list(channels)
-    records = await solve(**kwargs)
-    Path(prefix).mkdir(parents=True, exist_ok=True)
-    await install(records=records, target_prefix=prefix)
+def _find_pixi_bin() -> str | None:
+    for key in ("PIXI_EXE", "ASV_PIXI_BIN"):
+        val = os.environ.get(key)
+        if val and os.path.isfile(val) and os.access(val, os.X_OK):
+            return val
+    which = shutil.which("pixi")
+    if which:
+        return which
+    home = Path.home() / ".pixi" / "bin" / ("pixi.exe" if WIN else "pixi")
+    if home.is_file() and os.access(home, os.X_OK):
+        return str(home)
+    return None
 
 
 class Pixi(environment.Environment):
-    """Pixi-oriented ASV env: py-rattler create + ``.pixi/envs/default`` layout."""
+    """Manage an ASV env with the pixi CLI (subprocess-driven)."""
 
     tool_name = "pixi"
 
     def __init__(self, conf, python, requirements, tagged_env_vars):
-        if not _HAS_RATTLER:
-            raise environment.EnvironmentUnavailable(
-                "asv_env_pixi requires py-rattler (Rust backend via maturin wheel). "
-                "Install: pip install 'py-rattler>=0.22'"
-            )
         self._python = python
         self._requirements = requirements
         self._channels = list(getattr(conf, "conda_channels", None) or [])
         if "conda-forge" not in self._channels:
             self._channels.append("conda-forge")
+        self._pixi = _find_pixi_bin()
+        if not self._pixi:
+            raise environment.EnvironmentUnavailable(
+                "asv_env_pixi requires the pixi CLI (https://pixi.sh or PIXI_EXE). "
+                "This package is CLI-subprocess driven, not a maturin/rattler wheel."
+            )
         super().__init__(conf, python, requirements, tagged_env_vars)
         self._pixi_env_prefix = os.path.join(self._path, ".pixi", "envs", "default")
 
     @classmethod
     def matches(cls, python):
-        if not _HAS_RATTLER:
+        if not (re.match(r"^[0-9].*$", python) or re.match(r"^pypy[0-9.]*$", python)):
             return False
-        return bool(re.match(r"^[0-9].*$", python) or re.match(r"^pypy[0-9.]*$", python))
+        return _find_pixi_bin() is not None
 
-    def _spec_list(self) -> list[str]:
-        specs = [f"python={self._python}", "pip", "wheel"]
-        for key, val in {**self._requirements, **self._base_requirements}.items():
-            if key.startswith("pip+"):
-                continue
-            specs.append(f"{key}={val}" if val else key)
-        return specs
-
-    def _write_pixi_marker(self) -> Path:
-        """Write a minimal pixi.toml documenting the env (install is still py-rattler)."""
+    def _write_manifest(self) -> Path:
         root = Path(self._path)
         root.mkdir(parents=True, exist_ok=True)
-        deps = "\n".join(f'{s.split("=")[0]} = "*"' if "=" not in s else
-                         f'{s.split("=")[0]} = "{s.split("=", 1)[1]}"'
-                         for s in self._spec_list() if not s.startswith("pip+"))
-        # simpler fixed block
+        import platform as _plat
+
+        machine = _plat.machine().lower()
+        system = _plat.system().lower()
+        if system == "linux":
+            plat = "linux-64" if machine in ("x86_64", "amd64") else f"linux-{machine}"
+        elif system == "darwin":
+            plat = "osx-arm64" if machine in ("arm64", "aarch64") else "osx-64"
+        elif system == "windows":
+            plat = "win-64"
+        else:
+            plat = "linux-64"
+        channels = ", ".join(f'"{c}"' for c in self._channels)
+        dep_lines = [
+            f'python = "{self._python}.*"' if re.match(r"^\d+\.\d+$", self._python) else f'python = "{self._python}"',
+            'pip = "*"',
+            'wheel = "*"',
+        ]
+        for key, val in {**self._requirements, **getattr(self, "_base_requirements", {})}.items():
+            if key.startswith("pip+"):
+                continue
+            dep_lines.append(f'{key} = "{val}"' if val else f'{key} = "*"')
         body = textwrap.dedent(
             f"""\
-            # Generated by asv_env_pixi — install performed via py-rattler (Rust), not `pixi` CLI.
             [workspace]
             name = "asv-pixi-env"
-            channels = [{", ".join(repr(c) for c in self._channels)}]
-            platforms = ["linux-64", "osx-64", "osx-arm64", "win-64"]
+            channels = [{channels}]
+            platforms = ["{plat}"]
 
             [dependencies]
-            python = "{self._python}.*"
-            pip = "*"
-            wheel = "*"
             """
         )
+        body += "\n".join(dep_lines) + "\n"
         manifest = root / "pixi.toml"
         manifest.write_text(body, encoding="utf-8")
         return manifest
 
     def _setup(self):
-        log.info(
-            f"Creating pixi-layout env for {self.name} via py-rattler (Rust maturin API)"
+        log.info(f"Creating pixi workspace for {self.name} via CLI {self._pixi}")
+        manifest = self._write_manifest()
+        util.check_call(
+            [self._pixi, "install", "--manifest-path", str(manifest)],
+            env={**os.environ, **self.build_env_vars},
+            cwd=self._path,
+            timeout=self._install_timeout,
         )
-        self._write_pixi_marker()
-        prefix = self._pixi_env_prefix
-        asyncio.run(_rattler_create(prefix, self._spec_list(), self._channels))
-        # pip+ requirements into the prefix
-        for key, val in {**self._requirements, **self._base_requirements}.items():
-            if not key.startswith("pip+"):
-                continue
-            declaration = f"{key[4:]} {val}" if val else key[4:]
-            parsed = util.ParsedPipDeclaration(declaration)
-            util.construct_pip_call(self._run_pip, parsed)()
-        py = Path(prefix) / ("python.exe" if WIN else "bin/python")
-        if not py.exists() and not (Path(prefix) / "bin" / "python").exists():
+        prefix = Path(self._pixi_env_prefix)
+        if not prefix.is_dir():
+            envs_root = Path(self._path) / ".pixi" / "envs"
+            if envs_root.is_dir():
+                kids = [p for p in envs_root.iterdir() if p.is_dir()]
+                if kids:
+                    self._pixi_env_prefix = str(kids[0])
+                    prefix = Path(self._pixi_env_prefix)
+        if not (prefix / "bin" / "python").exists() and not (prefix / "python.exe").exists():
             raise environment.EnvironmentUnavailable(
-                f"py-rattler install finished but no python under {prefix}"
+                f"pixi install finished but no python under {self._pixi_env_prefix}"
             )
 
     def find_executable(self, executable):
@@ -162,11 +143,7 @@ class Pixi(environment.Environment):
             paths.insert(0, prefix)
         else:
             paths.insert(0, os.path.join(prefix, "bin"))
-        if "ASV_PYTHONPATH" in env:
-            env["PYTHONPATH"] = env["ASV_PYTHONPATH"]
-            env.pop("ASV_PYTHONPATH", None)
-        else:
-            env.pop("PYTHONPATH", None)
+        env.pop("PYTHONPATH", None)
         kwargs["env"] = dict(env, PIP_USER="false", PATH=str(os.pathsep.join(paths)))
         exe = self.find_executable(executable)
         if kwargs.get("timeout", None) is None:
@@ -174,11 +151,10 @@ class Pixi(environment.Environment):
         return util.check_output([exe] + list(args), **kwargs)
 
     def run(self, args, **kwargs):
-        log.debug(f"Running '{' '.join(args)}' in {self.name}")
         return self.run_executable("python", args, **kwargs)
 
     def _run_pip(self, args, **kwargs):
         return self.run_executable("python", ["-m", "pip"] + list(args), **kwargs)
 
 
-__all__ = ["Pixi", "_HAS_RATTLER", "_rattler_create"]
+__all__ = ["Pixi", "_find_pixi_bin"]

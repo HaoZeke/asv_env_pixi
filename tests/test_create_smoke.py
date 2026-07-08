@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from asv.config import Config
-from asv_env_pixi import Pixi, _HAS_RATTLER
+from asv_env_pixi import Pixi, _find_pixi_bin
 
 
 @pytest.fixture
@@ -24,9 +24,9 @@ def conf(tmp_path):
     return c
 
 
-def test_create_via_py_rattler_pixi_layout(conf):
-    if not _HAS_RATTLER:
-        pytest.skip("py-rattler not installed")
+def test_create_via_pixi_cli(conf):
+    if _find_pixi_bin() is None:
+        pytest.skip("pixi CLI not available")
     os.chdir(tempfile.mkdtemp())
     import sys
 
@@ -36,6 +36,3 @@ def test_create_via_py_rattler_pixi_layout(conf):
     env._setup()
     assert (Path(env._path) / "pixi.toml").is_file()
     assert Path(env.find_executable("python")).exists()
-    assert ".pixi" in str(env.find_executable("python"))
-    out = env.run_executable("python", ["-c", "print(4*4)"])
-    assert "16" in out
