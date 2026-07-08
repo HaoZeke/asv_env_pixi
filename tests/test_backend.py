@@ -10,7 +10,7 @@ def test_tool_name():
     assert Pixi.tool_name == "pixi"
 
 
-def test_uses_rattler_not_cli_only():
+def test_uses_rattler_api_not_pixi_cli():
     tree = ast.parse(Path(asv_env_pixi.__file__).read_text())
     imported = []
     for n in ast.walk(tree):
@@ -20,10 +20,10 @@ def test_uses_rattler_not_cli_only():
             imported.extend(a.name for a in n.names)
     assert any(m == "rattler" or m.startswith("rattler.") for m in imported)
     src = Path(asv_env_pixi.__file__).read_text()
-    assert "shutil.which" not in src or "pixi" not in src.split("shutil.which")[0][-20:]
-    # no pixi CLI driver
     assert "_find_pixi_bin" not in src
-    assert "pixi install" not in src or "not" in src.lower()
+    assert "shutil.which" not in src
+    assert "await solve" in src or "await solve(" in src or "solve(**" in src
+    assert "await install" in src or "install(records" in src
 
 
 def test_matches():
